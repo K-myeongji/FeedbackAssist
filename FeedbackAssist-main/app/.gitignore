@@ -1,0 +1,11 @@
+# Android Studio
+.idea
+.gradle
+local.properties
+/build
+/captures
+*.apk
+*.aab
+*.ap_
+
+/app/sampledata

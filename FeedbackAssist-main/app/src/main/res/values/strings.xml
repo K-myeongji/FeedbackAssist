@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FeedbackAssist</string>
+    <string name="service_notification_title">FeedbackAssist Active</string>
+    <string name="service_notification_content">Tap to open settings</string>
+    <string name="overlay_permission_required">Overlay permission is required for FeedbackAssist to work</string>
+    <string name="grant_permission">Grant Permission</string>
+    <string name="notification_permission_required">Notification permission is required</string>
+    <string name="welcome_title">Welcome to FeedbackAssist</string>
+    <string name="welcome_message">Voice-driven feedback collection made simple</string>
+    <string name="setup_permissions">Setup Permissions</string>
+    <string name="start_service">Start Service</string>
+    <string name="stop_service">Stop Service</string>
+    <string name="service_running">Service is running</string>
+    <string name="service_stopped">Service is stopped</string>
+    <string name="auto_start_enabled">Auto-start on boot enabled</string>
+    <string name="accessibility_service_description">볼륨 버튼 동시 입력을 감지하여 피드백 기능을 실행합니다.</string>
+</resources>
