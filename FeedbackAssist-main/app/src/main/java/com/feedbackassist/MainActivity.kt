@@ -70,10 +70,6 @@ class MainActivity : AppCompatActivity() {
         serviceRunning = preferences.getBoolean("service_running", false)
         updateUI()
 
-        // ▼▼▼▼▼ 기존의 자동 시작 코드를 삭제했습니다. ▼▼▼▼▼
-        // if (hasAllPermissions()) {
-        //     startScreenshotObserverService()
-        // }
     }
 
     override fun onStart() {

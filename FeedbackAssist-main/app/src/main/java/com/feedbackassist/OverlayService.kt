@@ -100,6 +100,8 @@ class OverlayService : Service() {
     }
 
     /** Downloads/FeedbackAssist 로 저장 (API29+는 MediaStore, 그 미만은 앱 전용 Download 폴더) */
+    // OverlayService.kt 파일의 startRecording 함수를 아래 코드로 통째로 바꾸세요.
+
     private fun startRecording() {
         try {
             recorder = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
@@ -108,47 +110,48 @@ class OverlayService : Service() {
             pendingDisplayName = "$base.m4a"
 
             if (Build.VERSION.SDK_INT >= 29) {
-                // ✅ 공개 저장소: Downloads/FeedbackAssist
+                // --- 안드로이드 10 (Q) 이상 ---
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, pendingDisplayName)
                     put(MediaStore.Downloads.MIME_TYPE, "audio/mp4")
-                    put(
-                        MediaStore.Downloads.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/FeedbackAssist"
-                    )
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/FeedbackAssist")
                     put(MediaStore.Downloads.IS_PENDING, 1)
                 }
-                val uri = contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-                ) ?: throw IllegalStateException("Failed to create MediaStore item")
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: throw IllegalStateException("Failed to create MediaStore item for recording.")
                 currentUri = uri
 
-                val pfd = contentResolver.openFileDescriptor(uri, "w")!!
+                val pfd = contentResolver.openFileDescriptor(uri, "w")
+                    ?: throw IllegalStateException("Failed to open ParcelFileDescriptor.")
+
                 recorder!!.apply {
                     setAudioSource(MediaRecorder.AudioSource.MIC)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setOutputFile(pfd.fileDescriptor) // 1. 출력 파일 먼저 설정 (이제 안전)
                     setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     setAudioEncodingBitRate(128_000)
                     setAudioSamplingRate(44_100)
-                    setOutputFile(pfd.fileDescriptor)
                     prepare()
                     start()
                 }
-                pfd.close()
+                // pfd.close() 코드를 여기서 삭제했습니다. 파일 디스크립터는 MediaRecorder가 사용하므로,
+                // 녹음이 끝난 후 recorder.release()가 호출될 때 시스템이 알아서 정리합니다.
+
             } else {
-                // ✅ Android 9 이하: 앱 전용 Download/FeedbackAssist
+                // --- 안드로이드 9 (P) 이하 ---
                 val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "FeedbackAssist")
                 if (!dir.exists()) dir.mkdirs()
-                val out = File(dir, pendingDisplayName)
+                val outputFile = File(dir, pendingDisplayName)
                 currentUri = null
 
                 recorder!!.apply {
+                    // 여기도 올바른 순서로 수정합니다.
                     setAudioSource(MediaRecorder.AudioSource.MIC)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                    setOutputFile(outputFile.absolutePath) // 1. 출력 파일 먼저 설정
                     setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     setAudioEncodingBitRate(128_000)
                     setAudioSamplingRate(44_100)
-                    setOutputFile(out.absolutePath)
                     prepare()
                     start()
                 }
@@ -157,12 +160,15 @@ class OverlayService : Service() {
             isRecording = true
             overlayView?.setRecordingState(true)
             updateNotification("Recording…")
+
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(this, "녹음을 시작할 수 없습니다.", Toast.LENGTH_SHORT).show()
+            // 이제 이 토스트 메시지는 나타나지 않을 것입니다.
+            Toast.makeText(this, "녹음 시작 실패: " + e.message, Toast.LENGTH_LONG).show()
             stopRecording(force = true)
         }
     }
+
 
     private fun stopRecording(force: Boolean = false) {
         runCatching { recorder?.stop() }

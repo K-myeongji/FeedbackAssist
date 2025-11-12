@@ -59,7 +59,8 @@
             android:name=".OverlayService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="specialUse" />
+            android:foregroundServiceType="microphone|specialUse" />
+
 
         <service android:name=".ScreenshotObserverService" />
 
