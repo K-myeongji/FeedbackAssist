@@ -1,12 +1,10 @@
 package com.feedbackassist
 
 import android.annotation.SuppressLint
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -17,7 +15,6 @@ import android.view.WindowManager
 import android.widget.ImageView
 import kotlin.math.abs
 
-
 @SuppressLint("ClickableViewAccessibility")
 class OverlayView(
     private val context: Context,
@@ -27,29 +24,23 @@ class OverlayView(
     private val wm: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
-    private val overlayPrefs: SharedPreferences =
-        context.getSharedPreferences("VolumeAssistOverlay", Context.MODE_PRIVATE)
     private val appPrefs: SharedPreferences =
         context.getSharedPreferences("VolumeAssistPrefs", Context.MODE_PRIVATE)
+    private val overlayPrefs: SharedPreferences =
+        context.getSharedPreferences("VolumeAssistOverlay", Context.MODE_PRIVATE)
 
     private var bubble: View? = null
     private var isRecording: Boolean = false
 
-    // drag state
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var dragging = false
     private val touchSlop by lazy { (10 * context.resources.displayMetrics.density).toInt() }
+    private var originalSize: Int = 0
 
     private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val overlayUpdateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context?, i: Intent?) {
-            if (i?.action == "com.volumeassist.UPDATE_OVERLAY") applyStyle()
-        }
-    }
 
     fun show() {
         if (bubble != null) return
@@ -58,29 +49,27 @@ class OverlayView(
         val view: View = LayoutInflater.from(context)
             .inflate(R.layout.overlay_record_bubble, null, false)
 
+        originalSize = try {
+            context.resources.getDimensionPixelSize(R.dimen.overlay_bubble_size)
+        } catch (e: Exception) {
+            (64 * context.resources.displayMetrics.density).toInt()
+        }
+
         view.setOnClickListener {
             if (dragging) return@setOnClickListener
             onToggleRecord()
         }
-
         view.setOnTouchListener { v, ev -> handleDragTouch(v, ev) }
 
-        // ▼▼▼▼▼ 여기가 수정되었습니다 ▼▼▼▼▼
-        wm.addView(view, createLayoutParams())
         bubble = view
+        wm.addView(view, createLayoutParams())
 
         applyStyle()
-        context.registerReceiver(
-            overlayUpdateReceiver,
-            IntentFilter("com.volumeassist.UPDATE_OVERLAY"),
-            Context.RECEIVER_NOT_EXPORTED
-        )
 
         renderState()
     }
 
     fun hide() {
-        runCatching { context.unregisterReceiver(overlayUpdateReceiver) }
         bubble?.let { runCatching { wm.removeView(it) } }
         bubble = null
     }
@@ -94,25 +83,42 @@ class OverlayView(
         mainHandler.post {
             val icon = bubble?.findViewById<ImageView>(R.id.micIcon) ?: return@post
             icon.setImageResource(if (isRecording) R.drawable.ic_mic_rec else R.drawable.ic_mic_idle)
-            icon.alpha = if (isRecording) 1.0f else 0.9f
+            // 투명도는 이제 applyStyle에서 뷰 전체에 적용하므로, 아이콘 개별 알파는 제거합니다.
+            // icon.alpha = if (isRecording) 1.0f else 0.9f
         }
     }
 
-    private fun applyStyle() {
+    // 이 함수는 외부(OverlayService)에서 호출되어야 하므로 public으로 유지합니다.
+    fun applyStyle() {
         val color = appPrefs.getInt("overlay_color", 0xFFA8B0C0.toInt())
         val trans = appPrefs.getInt("overlay_transparency", 90)
-        val size = appPrefs.getInt("overlay_size", 100)
+        val sizePercent = appPrefs.getInt("overlay_size", 100)
 
-        val alpha = (trans * 255 / 100)
-        val colorWithAlpha = (color and 0x00FFFFFF) or (alpha shl 24)
+        val view = bubble ?: return
 
-        bubble?.apply {
-            background?.mutate()?.setTint(colorWithAlpha)
-            val scale = size / 100f
-            scaleX = scale
-            scaleY = scale
+        // ----- 크기 계산 -----
+        val sizePx = (originalSize * (sizePercent / 100f)).toInt().coerceAtLeast(40)
+
+        // 레이아웃 크기 반영
+        val lp = view.layoutParams as WindowManager.LayoutParams
+        if (lp.width != sizePx || lp.height != sizePx) {
+            lp.width = sizePx
+            lp.height = sizePx
+            runCatching { wm.updateViewLayout(view, lp) }
         }
+
+        // ----- 색 + 투명도 계산 -----
+        val alpha = (trans * 255 / 100).coerceIn(0, 255)
+        val argb = (alpha shl 24) or (color and 0x00FFFFFF.toInt())
+
+        // ✅ 기존 배경은 버리고, 우리가 원하는 원형 배경을 새로 만든다.
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(argb)
+        }
+        view.background = bg
     }
+
 
     private fun createLayoutParams(): WindowManager.LayoutParams {
         val savedX = overlayPrefs.getInt("overlay_x", 800)
@@ -126,7 +132,7 @@ class OverlayView(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            flags, // 수정된 플래그 적용
+            flags,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -135,9 +141,9 @@ class OverlayView(
         }
     }
 
+    // handleDragTouch 함수는 수정할 필요가 없습니다.
     private fun handleDragTouch(view: View, event: MotionEvent): Boolean {
         val params = view.layoutParams as WindowManager.LayoutParams
-
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 initialTouchX = event.rawX
@@ -163,15 +169,15 @@ class OverlayView(
                 return false
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val wasDragging = dragging
                 if (dragging) {
-                    overlayPrefs.edit().putInt("overlay_x", params.x)
-                        .putInt("overlay_y", params.y).apply()
-                    dragging = false
-                    return true
+                    overlayPrefs.edit().putInt("overlay_x", params.x).putInt("overlay_y", params.y).apply()
                 }
-                return false
+                dragging = false
+                return wasDragging
             }
         }
         return false
     }
+
 }

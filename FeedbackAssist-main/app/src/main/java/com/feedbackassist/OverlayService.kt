@@ -195,12 +195,12 @@ class OverlayService : Service() {
 
         if (wasRecording && !force) {
             Toast.makeText(this, "녹음이 완료되었습니다.", Toast.LENGTH_SHORT).show()
-            // ✅ 파일명 입력 화면 호출 (API29+만: MediaStore 항목명 변경)
             currentUri?.let { uri ->
                 val i = Intent(this, RenameActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     putExtra(RenameActivity.EXTRA_URI, uri.toString())
-                    putExtra(RenameActivity.EXTRA_DEFAULT_NAME, pendingDisplayName)
+                    // "va_어쩌고" 대신, 빈 문자열("")을 전달하여 입력창을 비웁니다.
+                    putExtra(RenameActivity.EXTRA_DEFAULT_NAME, "")
                 }
                 startActivity(i)
             }
@@ -208,6 +208,7 @@ class OverlayService : Service() {
 
         currentUri = null
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
