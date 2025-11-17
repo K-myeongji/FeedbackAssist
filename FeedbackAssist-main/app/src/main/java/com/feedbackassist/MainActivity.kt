@@ -181,13 +181,11 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "모든 권한을 먼저 허용해주세요.", Toast.LENGTH_SHORT).show()
             return
         }
-        // 1. 오버레이 서비스 시작
+        // 1. 오버레이 서비스 시작 (이제 이 서비스가 알아서 스크린샷 서비스를 시작합니다)
         val overlayIntent = Intent(this, OverlayService::class.java)
         ContextCompat.startForegroundService(this, overlayIntent)
 
-        // 2. 스크린샷 감지 서비스 시작
-        val screenshotIntent = Intent(this, ScreenshotObserverService::class.java)
-        startService(screenshotIntent)
+        // 2. 스크린샷 감지 서비스 시작 코드를 여기서 완전히 제거합니다.
 
         serviceRunning = true
         preferences.edit().putBoolean("service_running", serviceRunning).apply()
@@ -195,17 +193,16 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "피드백 서비스가 시작되었습니다.", Toast.LENGTH_SHORT).show()
     }
 
+
     /**
      * 실행 중인 모든 서비스를 중지합니다.
      */
     private fun stopAllServices() {
-        // 1. 오버레이 서비스 중지
-        val overlayIntent = Intent(this, OverlayService::class.java)
-        stopService(overlayIntent)
-
-        // 2. 스크린샷 감지 서비스 중지
         val screenshotIntent = Intent(this, ScreenshotObserverService::class.java)
         stopService(screenshotIntent)
+
+        val overlayIntent = Intent(this, OverlayService::class.java)
+        stopService(overlayIntent)
 
         serviceRunning = false
         preferences.edit().putBoolean("service_running", serviceRunning).apply()
@@ -213,7 +210,6 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "피드백 서비스가 중지되었습니다.", Toast.LENGTH_SHORT).show()
     }
 
-    // ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     private fun hasAllPermissions(): Boolean {
         val hasStorage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

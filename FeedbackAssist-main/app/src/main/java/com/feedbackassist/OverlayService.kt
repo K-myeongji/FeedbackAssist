@@ -5,9 +5,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.MediaRecorder
@@ -24,8 +26,10 @@ import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.feedbackassist.ServiceBus.ACTION_SERVICE_STATE
 import com.feedbackassist.ServiceBus.ACTION_STOP_SERVICE
+import com.feedbackassist.ServiceBus.ACTION_UPDATE_OVERLAY
 import com.feedbackassist.ServiceBus.EXTRA_RUNNING
 import java.io.File
+
 
 class OverlayService : Service() {
 
@@ -39,31 +43,53 @@ class OverlayService : Service() {
     private val channelId = "VolumeAssistChannel"
     private val notifId = 1
 
-    // MediaStore(Downloads) 항목 URI
     private var currentUri: Uri? = null
     private var pendingDisplayName: String = ""
+
+    private val overlayUpdateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            // 액션 체크까지 넣고 싶으면:
+            if (intent?.action == ACTION_UPDATE_OVERLAY) {
+                overlayView?.applyStyle()
+            }
+        }
+    }
+
 
     override fun onCreate() {
         super.onCreate()
         mainHandler = Handler(Looper.getMainLooper())
         appPrefs = getSharedPreferences("VolumeAssistPrefs", MODE_PRIVATE)
 
-        // 오버레이 권한 없으면 즉시 종료
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
         }
 
-        // 알림 채널 + 포그라운드 시작
+        // ✅ 1) 오버레이 버블 생성
+        overlayView = OverlayView(this) { toggleRecording() }.also { it.show() }
+        // 처음 한 번 현재 설정값 적용
+        overlayView?.applyStyle()
+
+        // ✅ 2) 브로드캐스트 리시버 등록
+        val filter = IntentFilter(ACTION_UPDATE_OVERLAY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(overlayUpdateReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(overlayUpdateReceiver, filter)
+        }
+
+        appPrefs.registerOnSharedPreferenceChangeListener(prefListener)
+
         createNotificationChannel()
         startForeground(notifId, buildNotification("Ready"))
 
-        // 오버레이 표시 (버튼 탭 → 녹음 토글)
-        overlayView = OverlayView(this) { toggleRecording() }.also { it.show() }
-
-        // 상태 저장 + 브로드캐스트
         appPrefs.edit().putBoolean("service_running", true).apply()
         sendStateBroadcast(true)
+
+        val screenshotServiceIntent = Intent(this, ScreenshotObserverService::class.java)
+        startService(screenshotServiceIntent)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,11 +103,22 @@ class OverlayService : Service() {
         return START_STICKY
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        stopRecording(force = true)
+        overlayView?.hide()
+        overlayView = null
+
+        appPrefs.edit().putBoolean("service_running", false).apply()
+        sendStateBroadcast(false)
+
+        runCatching { unregisterReceiver(overlayUpdateReceiver) }
+    }
+
     private fun toggleRecording() {
         if (isRecording) {
             stopRecording()
         } else {
-            // 삑- 소리 후 약간의 지연 뒤 녹음 시작
             playTriggerBeep { startRecording() }
         }
     }
@@ -99,9 +136,6 @@ class OverlayService : Service() {
         }
     }
 
-    /** Downloads/FeedbackAssist 로 저장 (API29+는 MediaStore, 그 미만은 앱 전용 Download 폴더) */
-    // OverlayService.kt 파일의 startRecording 함수를 아래 코드로 통째로 바꾸세요.
-
     private fun startRecording() {
         try {
             recorder = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(this) else MediaRecorder()
@@ -110,7 +144,6 @@ class OverlayService : Service() {
             pendingDisplayName = "$base.m4a"
 
             if (Build.VERSION.SDK_INT >= 29) {
-                // --- 안드로이드 10 (Q) 이상 ---
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, pendingDisplayName)
                     put(MediaStore.Downloads.MIME_TYPE, "audio/mp4")
@@ -127,28 +160,23 @@ class OverlayService : Service() {
                 recorder!!.apply {
                     setAudioSource(MediaRecorder.AudioSource.MIC)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setOutputFile(pfd.fileDescriptor) // 1. 출력 파일 먼저 설정 (이제 안전)
+                    setOutputFile(pfd.fileDescriptor)
                     setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     setAudioEncodingBitRate(128_000)
                     setAudioSamplingRate(44_100)
                     prepare()
                     start()
                 }
-                // pfd.close() 코드를 여기서 삭제했습니다. 파일 디스크립터는 MediaRecorder가 사용하므로,
-                // 녹음이 끝난 후 recorder.release()가 호출될 때 시스템이 알아서 정리합니다.
-
             } else {
-                // --- 안드로이드 9 (P) 이하 ---
                 val dir = File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "FeedbackAssist")
                 if (!dir.exists()) dir.mkdirs()
                 val outputFile = File(dir, pendingDisplayName)
                 currentUri = null
 
                 recorder!!.apply {
-                    // 여기도 올바른 순서로 수정합니다.
                     setAudioSource(MediaRecorder.AudioSource.MIC)
                     setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                    setOutputFile(outputFile.absolutePath) // 1. 출력 파일 먼저 설정
+                    setOutputFile(outputFile.absolutePath)
                     setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                     setAudioEncodingBitRate(128_000)
                     setAudioSamplingRate(44_100)
@@ -163,12 +191,10 @@ class OverlayService : Service() {
 
         } catch (e: Exception) {
             e.printStackTrace()
-            // 이제 이 토스트 메시지는 나타나지 않을 것입니다.
             Toast.makeText(this, "녹음 시작 실패: " + e.message, Toast.LENGTH_LONG).show()
             stopRecording(force = true)
         }
     }
-
 
     private fun stopRecording(force: Boolean = false) {
         runCatching { recorder?.stop() }
@@ -181,7 +207,6 @@ class OverlayService : Service() {
         overlayView?.setRecordingState(false)
         updateNotification("Ready")
 
-        // MediaStore 마무리 (API29+): IS_PENDING → 0
         if (!force && Build.VERSION.SDK_INT >= 29) {
             currentUri?.let { uri ->
                 runCatching {
@@ -199,7 +224,6 @@ class OverlayService : Service() {
                 val i = Intent(this, RenameActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     putExtra(RenameActivity.EXTRA_URI, uri.toString())
-                    // "va_어쩌고" 대신, 빈 문자열("")을 전달하여 입력창을 비웁니다.
                     putExtra(RenameActivity.EXTRA_DEFAULT_NAME, "")
                 }
                 startActivity(i)
@@ -209,26 +233,23 @@ class OverlayService : Service() {
         currentUri = null
     }
 
-
-    override fun onDestroy() {
-        super.onDestroy()
-        stopRecording(force = true)
-        overlayView?.hide()
-        overlayView = null
-
-        // 상태 저장 + 브로드캐스트
-        appPrefs.edit().putBoolean("service_running", false).apply()
-        sendStateBroadcast(false)
-    }
-
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // 상태 브로드캐스트
     private fun sendStateBroadcast(running: Boolean) {
         sendBroadcast(Intent(ACTION_SERVICE_STATE).putExtra(EXTRA_RUNNING, running))
     }
 
-    // ---------- Notification ----------
+    private val prefListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "overlay_color" ||
+                key == "overlay_transparency" ||
+                key == "overlay_size"
+            ) {
+                // 설정이 바뀔 때마다 버블 스타일 다시 적용
+                overlayView?.applyStyle()
+            }
+        }
+
     private fun createNotificationChannel() {
         val nm = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
@@ -283,6 +304,7 @@ class OverlayService : Service() {
     }
 
     companion object {
-        private const val ACTION_TOGGLE_RECORD = "TOGGLE_RECORD"
+        // MainActivity의 알림 클릭 시 전달되는 Action과 구분하기 위해 이름을 다르게 사용
+        private const val ACTION_TOGGLE_RECORD = "com.feedbackassist.TOGGLE_RECORD_FROM_NOTIF"
     }
 }

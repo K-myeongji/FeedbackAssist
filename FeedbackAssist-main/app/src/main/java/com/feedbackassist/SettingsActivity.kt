@@ -139,6 +139,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun notifyOverlayUpdate() {
-        sendBroadcast(Intent("com.volumeassist.UPDATE_OVERLAY"))
+        sendBroadcast(Intent(ServiceBus.ACTION_UPDATE_OVERLAY))
     }
+
 }
